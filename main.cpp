@@ -2,7 +2,6 @@
 #include <mysql/mysql.h>
 using namespace std;
 
-// ---------------- DATA STRUCTURES ----------------
 struct Edge {
     int to;
     double amount;
@@ -17,13 +16,16 @@ void connectDB() {
     conn = mysql_init(NULL);
     if (!mysql_real_connect(
             conn,
-            "localhost",     // host
-            "root",          // user
-            "password",      // password
-            "bank_db",       // database
-            0, NULL, 0)) {
+            "127.0.0.1",   // TCP (IMPORTANT)
+            "root",
+            "root123",     // your MySQL password
+            "bank_db",
+            3306,
+            NULL,
+            0)) {
 
-        cerr << "MySQL connection failed\n";
+        cerr << "MySQL connection failed: "
+             << mysql_error(conn) << endl;
         exit(1);
     }
 }
@@ -39,32 +41,37 @@ void loadTransactions() {
     MYSQL_ROW row;
 
     while ((row = mysql_fetch_row(res))) {
-        int u = stoi(row[0]);
-        int v = stoi(row[1]);
-        double amt = stod(row[2]);
+        if (row[0] && row[1] && row[2]) {
+    int u = stoi(row[0]);
+    int v = stoi(row[1]);
+    double amt = stod(row[2]);
 
-        if (u <= n && v <= n) {
-            adj[u].push_back({v, amt});
-        }
+    if (u <= n && v <= n) {
+        adj[u].push_back({v, amt});
+    }
+}
     }
     mysql_free_result(res);
 }
 
 // ---------------- CYCLE DETECTION ----------------
-bool dfsCycle(int u, vector<bool>& visited, vector<bool>& stack) {
+bool dfsCycle(int u, vector<bool>& visited,
+              vector<bool>& stack,
+              vector<bool>& inCycle) {
+
     visited[u] = true;
     stack[u] = true;
 
     for (auto &e : adj[u]) {
         int v = e.to;
-        if (!visited[v] && dfsCycle(v, visited, stack))
-            return true;
+        if (!visited[v] && dfsCycle(v, visited, stack, inCycle))
+            inCycle[u] = true;
         else if (stack[v])
-            return true;
+            inCycle[u] = true;
     }
 
     stack[u] = false;
-    return false;
+    return inCycle[u];
 }
 
 // ---------------- STORE FRAUD FLAG ----------------
@@ -82,8 +89,7 @@ void storeFraudFlag(int accountId, int riskScore, const string& reason) {
 int main() {
     connectDB();
 
-    // Fetch number of accounts
-    mysql_query(conn, "SELECT COUNT(*) FROM accounts");
+    mysql_query(conn, "SELECT MAX(account_id) FROM accounts");
     MYSQL_RES* res = mysql_store_result(conn);
     MYSQL_ROW row = mysql_fetch_row(res);
     n = stoi(row[0]);
@@ -103,12 +109,13 @@ int main() {
         }
     }
 
-    vector<bool> visited(n + 1, false), recStack(n + 1, false);
+    vector<bool> visited(n + 1, false);
+    vector<bool> recStack(n + 1, false);
     vector<bool> inCycle(n + 1, false);
 
     for (int i = 1; i <= n; i++) {
-        if (!visited[i] && dfsCycle(i, visited, recStack)) {
-            inCycle[i] = true;
+        if (!visited[i]) {
+            dfsCycle(i, visited, recStack, inCycle);
         }
     }
 
@@ -119,7 +126,7 @@ int main() {
 
     for (int i = 1; i <= n; i++) {
         int riskScore = 0;
-        string reason = "";
+        string reason;
 
         if (txnCount[i] >= TXN_THRESHOLD) {
             riskScore++;
@@ -139,7 +146,6 @@ int main() {
         if (riskScore > 0) {
             cout << "Account " << i
                  << " | Risk Score: " << riskScore << "\n";
-
             storeFraudFlag(i, riskScore, reason);
         }
     }
